@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "github-insights-backup"
+version = "0.1.0"
+description = "Keep GitHub Insights beyond the 14-day traffic window, in your own private repository."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+dependencies = []
+
+[project.scripts]
+github-insights-backup = "insights_backup.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["insights_backup*"]

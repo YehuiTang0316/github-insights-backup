@@ -1,0 +1,75 @@
+name: Back up Insights
+
+on:
+  schedule:
+    - cron: "0 1 * * *" # Daily at 09:00 Asia/Shanghai (UTC+8).
+  workflow_dispatch:
+    inputs:
+      repositories:
+        description: "Optional owner/repo list, separated by commas; overrides saved configuration for this run"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: insights-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    # Public upstream is code only. Private copies get scheduled backups automatically.
+    if: github.event.repository.private || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Require a private archive
+        env:
+          IS_PRIVATE: ${{ github.event.repository.private }}
+        run: |
+          if [ "$IS_PRIVATE" != "true" ]; then
+            echo "::error::Create a PRIVATE repository with Use this template before running backups."
+            exit 1
+          fi
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch snapshots and update the daily index
+        id: fetch
+        continue-on-error: true
+        env:
+          INSIGHTS_TOKEN: ${{ secrets.INSIGHTS_TOKEN }}
+          INSIGHTS_TOKENS_JSON: ${{ secrets.INSIGHTS_TOKENS_JSON }}
+          TARGET_REPOSITORIES: ${{ inputs.repositories || vars.TARGET_REPOSITORIES }}
+        run: python -m insights_backup
+
+      - name: Commit successful and partial snapshots
+        id: commit
+        if: always() && steps.fetch.outcome != 'skipped' && steps.fetch.outcome != ''
+        run: |
+          if [ ! -d data ]; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --force data/
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "chore: archive Insights $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git push
+
+      - name: Preserve snapshots if synchronization fails
+        if: failure() && steps.commit.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: insights-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: data/
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Report incomplete backup
+        if: always() && steps.fetch.outcome == 'failure'
+        run: |
+          echo "::error::Backup incomplete. Check the run summary and snapshot manifests; saved files were committed."
+          exit 1
